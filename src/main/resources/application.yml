@@ -1,0 +1,99 @@
+# 本文件会提交到公开仓库：所有密钥一律用环境变量占位，禁止写明文！
+# 本地配置方法见根目录 .env.example（SPRING_* 前缀变量由 Spring Boot 宽松绑定自动覆盖同名配置项）
+server:
+  port: 8080
+
+spring:
+  application:
+    name: aiagentdemo
+  # 暂时注释掉 local 激活，确保主配置文件生效
+  # profiles:
+  #   active: local
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/aiagent?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD}   # 从环境变量读取，勿在此写明文
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+      timeout: 5000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+          max-wait: -1ms
+
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:CHANGE_ME}
+      base-url: https://dashscope.aliyuncs.com
+      chat:
+        options:
+          model: qwen-plus
+          temperature: 0.7
+      embedding:
+        options:
+          model: text-embedding-v4
+          dimensions: 1024
+
+    # 重试配置：与 dashscope 平级，在 spring.ai 下面
+    retry:
+      max-attempts: 3
+      backoff:
+        initial-interval: 1000
+        multiplier: 2
+        max-interval: 5000
+      exclude-on-http-codes: 400,401,403
+
+    vectorstore:
+      elasticsearch:
+        initialize-schema: false  # 关闭自动建索引：改由应用启动时用带中文(ngram bigram)分析器的 mapping 预建
+        index-name: spring-ai-document-index-v2  # 换新名，避开旧 standard 分析器索引
+        dimensions: 1024       # 向量维度（必须与预建 mapping 中的 dims 一致）
+        similarity: cosine     # 相似度算法
+
+  elasticsearch:
+    uris: http://localhost:9200
+    username: ${SPRING_ELASTICSEARCH_USERNAME:newadmin}
+    password: ${SPRING_ELASTICSEARCH_PASSWORD}   # 从环境变量读取，勿在此写明文
+
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.example.aiagentdemo.entity
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    map-underscore-to-camel-case: true
+
+# RAG 入库配置
+# 步骤：① 平时启动无需理会（false=不自动入库，ES 数据持久复用）
+#      ② 改了 java.md 后，执行一次：curl -X POST http://localhost:8080/api/ai/reingest （覆盖式，不会重复）
+#      ③ 换 embedding 模型/维度后须先删 ES 索引再重建
+app:
+  rag:
+    ingest-on-startup: false   # true=每次启动自动入库；false=只手动触发（推荐方案一）
+    batch-size: 10             # 单次向量化的文本块数，需 ≤25（DashScope 上限）
+    # 切块策略：结构优先，超长块再按定长 + 重叠二次切分
+    chunking:
+      max-chars: 800           # 单块最大字符数
+      overlap: 80              # 相邻重叠字符数（约为块长的 10%）
+    # 混合检索（向量 + ES 全文 BM25，RRF 融合）
+    retrieval:
+      top-k: 10                # 向量召回数量
+      text-top-k: 10           # 全文召回数量
+      similarity-threshold: 0.5 # 向量相似度阈值
+      max-sources: 5           # 融合后最终保留的片段/来源数
+      rrf-k: 60                # RRF 平滑常数（越大越弱化头部排名差异）
+      text-min-should-match: 50% # 全文BM25最小匹配门槛，过滤泛词(如“什么”)蹭到的离题片段；调低=更宽松,调高(如75%)=更严格
+    # 启动时预建向量索引（带中文 ngram bigram 分析器）；索引已存在则跳过
+    ensure-index:
+      enabled: true
+  # HTTP 客户端超时（解决 DashScope 长回答读取超时 SocketTimeoutException）
+  http:
+    connect-timeout: 10s       # 建立连接超时
+    read-timeout: 300s         # 读取响应超时，建议 180~300s（大模型生成较慢时给足余量）
