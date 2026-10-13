@@ -6,4 +6,18 @@
     <select id="findAll" resultType="Course">
         SELECT id, name, teacher FROM t_course
     </select>
+
+    <!-- 依赖 t_course.category 列；不存在时先执行：
+         ALTER TABLE t_course ADD COLUMN category VARCHAR(50) DEFAULT NULL COMMENT '课程分类'; -->
+    <select id="search" resultType="Course">
+        SELECT id, name, teacher, category
+        FROM t_course
+        <where>
+            <if test="keyword != null and keyword != ''">
+                (name LIKE CONCAT('%', #{keyword}, '%') OR category LIKE CONCAT('%', #{keyword}, '%'))
+            </if>
+        </where>
+        ORDER BY id
+        LIMIT 20
+    </select>
 </mapper>
