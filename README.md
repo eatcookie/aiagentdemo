@@ -11,6 +11,7 @@
 | --- | --- |
 | ✅ Done | 文档按标题结构化切块入库、DashScope 向量化、ES 向量存储（自定义 mapping）、混合检索（向量 + BM25）、RRF 融合去重、`/api/ai/ask` 返回答案与引用来源、一键入库自测脚本 |
 | ✅ Done | **Function Call 轻量工具路由**：模型自主决定调用 `query_courses`（MySQL 按课程名/分类查询）或 `query_question_history`（Redis 按用户查提问历史） |
+| ✅ Done | **管理后台（Vue SPA + Token 鉴权）**：登录/注册/登出、课程增删改查分页、AI 答疑、检索调试、知识库入库、提问历史、用户管理，入口 `/admin` |
 | 🚧 In Progress | 检索质量调优（阈值/权重）、多文档类型支持（PDF 依赖已引入）、回答流式输出 |
 | 📋 Planned | 多轮对话记忆、重排（rerank）、检索效果评估集、简易前端页面、Docker 化部署 |
 
@@ -61,8 +62,9 @@
 | Spring AI Alibaba DashScope | 1.0.0.2 · chat: `qwen-plus`，embedding: `text-embedding-v4`（1024 维） |
 | Elasticsearch | 8.x，客户端 `elasticsearch-java` 8.17.0，向量字段 `dense_vector` + `int8_hnsw` + cosine |
 | MyBatis + MySQL | `mybatis-spring-boot-starter` 3.0.3（示例业务接口） |
-| Spring Security | 演示接口放行，其余需登录 |
+| Spring Security | 演示/健康/AI 接口放行；后台 `/api/admin/**` 由 `AdminAuthInterceptor` 校验 Token（详见 API Endpoints） |
 | Redis | 本地 `6379`：提问历史 List（Function Call 工具）+ 登录 Token |
+
 
 ## Architecture · 架构与流程
 
@@ -142,7 +144,7 @@ powershell -ExecutionPolicy Bypass -File scripts\reingest-and-test.ps1 -Question
 
 ## API Endpoints · 接口说明
 
-`/api/login`、`/health`、`/api/ai/**` 已在 Spring Security 中放行，可直接调用；其余接口需登录。
+`/api/login`、`/health`、`/api/ai/**` 已在 Spring Security 中放行，可直接调用；`/admin/**` 与 `/api/admin/**`（除登录/注册外）由 `AdminAuthInterceptor` 校验 `X-Token`/`Authorization: Bearer`，登录质询未接入 Spring Security，其余路径 `authenticated()` 仅作文档声明。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -152,6 +154,30 @@ powershell -ExecutionPolicy Bypass -File scripts\reingest-and-test.ps1 -Question
 | POST | `/api/login` | 登录示例（MyBatis + BCrypt 校验） |
 | GET | `/course/list` | 课程列表示例 |
 | GET | `/health` | 健康检查 |
+
+## Admin Console · 管理后台（Vue SPA）
+
+访问入口 `http://localhost:8080/admin`（`WebMvcConfig` 转发到 `static/admin/index.html`，Vue 已本地化，无需 CDN）。登录签发 Redis Token（`ai:token:{token}`，TTL 2h），后续请求带 `X-Token` 头，由 `AdminAuthInterceptor` 校验并写入 `UserContext`。所有响应统一封装为 `{ code, message, data }`（`code=0` 为成功，见 `common/Result`；异常由 `GlobalExceptionHandler` 兜底）。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/admin/login` | 后台登录（BCrypt 校验 + 签发 Token） |
+| POST | `/api/admin/register` | 注册（用户名唯一校验 + BCrypt 加密） |
+| POST | `/api/admin/logout` | 登出（作废 Redis Token，后端失效 + 前端清 localStorage 双清理） |
+| GET | `/api/admin/courses?keyword=&page=&size=` | 课程分页（匹配名称/分类/讲师） |
+| GET | `/api/admin/courses/{id}` | 课程详情 |
+| POST | `/api/admin/courses` | 新增课程 |
+| PUT | `/api/admin/courses/{id}` | 编辑课程 |
+| DELETE | `/api/admin/courses/{id}` | 删除课程 |
+| POST | `/api/admin/rag/ask` | AI 答疑（复用 `RagQaService`，user 取当前登录人） |
+| GET | `/api/admin/rag/retrieval?question=` | 检索调试（只召回不调模型，查看向量+BM25+RRF） |
+| POST | `/api/admin/rag/reingest` | 知识库覆盖式入库 |
+| GET | `/api/admin/history?user=` | 查看提问历史（省略 user = 当前登录人） |
+| GET | `/api/admin/users` | 用户列表（脱敏，不含密码） |
+
+> 登出为「后端作废 Token + 前端清 localStorage」双清理：前端直接 `fetch('/api/admin/logout')` 携带旧 Token，`TokenStore.invalidate()` 删除 Redis 键；即使该请求失败，前端仍会清空本地存储兜底登出。
+
+后台页面含 6 个屏：课程管理、AI 答疑、检索调试、知识库、提问历史、用户管理。
 
 **`POST /api/ai/ask`**
 
@@ -222,15 +248,17 @@ powershell -ExecutionPolicy Bypass -File scripts\reingest-and-test.ps1 -Question
 
 ```text
 src/main/java/com/example/aiagentdemo/
-├── config/      ChatClientConfig · ElasticsearchIndexInitializer · RestClientConfig · Security*
-├── controller/  AiTestController(RAG + Function Call 工具) · AuthController · CourseController · HealthController
-├── service/     RagIngestService(切分入库) · HybridRetrievalService(混合检索+RRF) · AiService · ...
+├── config/      ChatClientConfig · ElasticsearchIndexInitializer · RestClientConfig · Security* · WebMvcConfig · AdminAuthInterceptor
+├── controller/  AiTestController(RAG + Function Call) · AdminAuthController(登录/注册/登出) · AdminCourseController · AdminRagController · AdminHistoryController · AdminUserController · AuthController · CourseController · HealthController
+├── service/     RagIngestService(切分入库) · HybridRetrievalService(混合检索+RRF) · RagQaService · AdminCourseService · UserService · CourseService · AiService
 ├── tools/       CourseTools(按名称/分类查课程) · HistoryTools(记录/查询提问历史)
-├── support/     UserContext(请求级用户上下文，ThreadLocal)
+├── support/     UserContext(请求级用户上下文，ThreadLocal) · TokenStore(Redis Token 签发/校验/作废)
+├── common/      Result(code=0 成功) · PageResult · BizException · GlobalExceptionHandler
 ├── entity/ mapper/  MyBatis 示例业务（User / Course，Course 含 category）
 src/main/resources/
 ├── document/java.md              RAG 语料：Java 课程文档
 ├── es/document-index-mapping.json 自定义索引 mapping（ngram bigram + dense_vector）
+├── static/admin/                 管理后台 Vue SPA（index.html + 本地化 vue.global.prod.js）
 └── application.yml               全部密钥为环境变量占位符
 scripts/
 ├── reingest-and-test.ps1         一键「入库 + 提问自测」，支持 -RecreateIndex
@@ -260,6 +288,7 @@ scripts/
 - [ ] 流式输出（SSE）与前端问答页面
 - [ ] Docker Compose 一键起 MySQL / Redis / ES
 - [x] Agent 化：Function Call 轻量工具路由（查课程、查提问历史）
+- [x] 管理后台 SPA（课程 CRUD / AI 答疑 / 检索调试 / 知识库 / 历史 / 用户）
 - [ ] Agent 扩展：成绩查询、多工具编排与参数校验
 
 ## Notes · 说明

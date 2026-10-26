@@ -13,7 +13,10 @@ public class SecurityFilterConfig {
         http
                 .csrf(csrf -> csrf.disable())  // 关闭 CSRF（开发阶段方便测试）
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/login", "/health", "/api/ai/**").permitAll()  // 放行登录和健康检查
+                        // 演示/健康/AI 接口保持放行
+                        .requestMatchers("/api/login", "/health", "/api/ai/**").permitAll()
+                        // 管理后台：Security 层整体放行（含登录与数据接口），Token 校验交由 AdminAuthInterceptor
+                        .requestMatchers("/admin/**", "/api/admin/**", "/", "/index.html", "/favicon.ico").permitAll()
                         .anyRequest().authenticated()  // 其他接口需要登录
                 );
         return http.build();

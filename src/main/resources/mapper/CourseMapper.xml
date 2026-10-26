@@ -9,6 +9,7 @@
 
     <!-- 依赖 t_course.category 列；不存在时先执行：
          ALTER TABLE t_course ADD COLUMN category VARCHAR(50) DEFAULT NULL COMMENT '课程分类'; -->
+
     <select id="search" resultType="Course">
         SELECT id, name, teacher, category
         FROM t_course
@@ -20,4 +21,53 @@
         ORDER BY id
         LIMIT 20
     </select>
+
+    <!-- 管理后台：分页查询（keyword 可选，匹配名称/分类/讲师） -->
+    <select id="searchPaged" resultType="Course">
+        SELECT id, name, teacher, category
+        FROM t_course
+        <where>
+            <if test="keyword != null and keyword != ''">
+                (name LIKE CONCAT('%', #{keyword}, '%')
+                OR category LIKE CONCAT('%', #{keyword}, '%')
+                OR teacher LIKE CONCAT('%', #{keyword}, '%'))
+            </if>
+        </where>
+        ORDER BY id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countSearch" resultType="long">
+        SELECT COUNT(*) FROM t_course
+        <where>
+            <if test="keyword != null and keyword != ''">
+                (name LIKE CONCAT('%', #{keyword}, '%')
+                OR category LIKE CONCAT('%', #{keyword}, '%')
+                OR teacher LIKE CONCAT('%', #{keyword}, '%'))
+            </if>
+        </where>
+    </select>
+
+    <select id="findById" resultType="Course">
+        SELECT id, name, teacher, category FROM t_course WHERE id = #{id}
+    </select>
+
+    <insert id="insert" parameterType="Course" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_course (name, teacher, category)
+        VALUES (#{name}, #{teacher}, #{category})
+    </insert>
+
+    <update id="updateById" parameterType="Course">
+        UPDATE t_course
+        <set>
+            <if test="name != null">name = #{name},</if>
+            <if test="teacher != null">teacher = #{teacher},</if>
+            <if test="category != null">category = #{category},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM t_course WHERE id = #{id}
+    </delete>
 </mapper>
