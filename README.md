@@ -244,11 +244,83 @@ powershell -ExecutionPolicy Bypass -File scripts\reingest-and-test.ps1 -Question
 - 来源离题 / 噪声多 → 升 `text-min-should-match`（如 `75%`）、升 `similarity-threshold`、降 `max-sources`
 - 改了 `es/document-index-mapping.json`（分析器或向量维度）→ **必须删索引**：`.\scripts\reingest-and-test.ps1 -RecreateIndex` → 重启应用 → 再入库
 
+## Database Schema · 表结构
+
+MySQL 8，库名 `aiagent`，字符集 `utf8mb4`。完整脚本见 [deploy/init-sql/01-schema.sql](deploy/init-sql/01-schema.sql)（Docker Compose 首次启动自动执行；手动部署时直接运行该脚本建表）。
+
+```sql
+CREATE TABLE t_course (
+    id       BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '课程ID',
+    name     VARCHAR(100) NOT NULL COMMENT '课程名称',
+    teacher  VARCHAR(50)  COMMENT '讲师',
+    category VARCHAR(50)  COMMENT '课程分类（Function Call query_courses 模糊匹配用）',
+    UNIQUE KEY uk_course_name (name)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '课程表';
+
+CREATE TABLE t_user (
+    id       BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '用户ID',
+    username VARCHAR(50)  NOT NULL COMMENT '登录名',
+    password VARCHAR(100) NOT NULL COMMENT 'BCrypt 哈希，禁止明文',
+    role     VARCHAR(20)  DEFAULT 'USER' COMMENT '角色：ADMIN / USER',
+    UNIQUE KEY uk_user_username (username)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '用户表';
+```
+
+Redis 键约定（登录 Token、提问历史、问答缓存、限流计数共用一个实例）：
+
+| Key | 类型 | 说明 | 过期/上限 |
+| --- | --- | --- | --- |
+| `ai:token:{token}` | String | 后台登录 Token → username | TTL 2h |
+| `ai:history:{user}` | List | 用户提问历史（最新在前） | 保留 50 条 |
+| `ai:qa:{question}` | String | 问答结果缓存 | TTL 1 天 |
+| `ai:limit:{identity}:{minute}` | Counter | 每人每分钟请求计数（限流） | TTL 60s |
+
+## Cost · 成本估算
+
+MySQL / Redis / ES 均本地或自建部署，无云账单；唯一外部成本是 DashScope 调用（单价随官方调整，以百炼定价页为准）：
+
+| 模型 | 用途 | 参考单价 | 单次估算 |
+| --- | --- | --- | --- |
+| `qwen-plus` | 问答生成 | 输入 ¥0.8/百万 token，输出 ¥2/百万 token | 输入≈3k token（system + 5 片段≤4000 字 + 问题），输出≈0.5k → **约 ¥0.003/次** |
+| `text-embedding-v4` | 文档向量化 | ¥0.5/百万 token | 全量入库 56 块约 3 万 token → **约 ¥0.015/整库** |
+
+量级口径：日提问 100 次 ≈ ¥0.3；影响输入 token 的最大变量是 `max-sources` 与 `chunking.max-chars`，降成本优先调小这两项；命中 `ai:qa:` 缓存的请求为 0 成本。
+
+## Docker Compose · 一键部署
+
+一条命令同时启动 MySQL / Redis / Elasticsearch / 应用四个容器（需先安装 Docker Desktop；MySQL 首次启动会自动执行上面的建表脚本）：
+
+```powershell
+# 1. 在当前 PowerShell 会话提供三个密钥（供 compose 读取，勿写入文件）
+$env:DASHSCOPE_API_KEY="sk-你的密钥"
+$env:MYSQL_PASSWORD="你的mysql密码"
+$env:SPRING_ELASTICSEARCH_PASSWORD="你的es密码"
+
+# 2. 构建并后台启动全部服务（首次约几分钟：拉镜像 + 编译）
+docker compose up -d --build
+
+# 3. 等待应用就绪（日志出现 Started AiagentdemoApplication）
+docker compose logs -f app
+
+# 4. 文档入库一次，然后访问管理后台 http://localhost:8080/admin
+Invoke-RestMethod -Uri 'http://localhost:8080/api/ai/reingest' -Method POST
+```
+
+```text
+停止（数据保留，下次 up 直接复用）：docker compose down
+彻底重置（连数据卷删除，下次 up 重新建表）：docker compose down -v
+只想用容器起中间件、应用仍在 IDEA 里运行：docker compose up -d mysql redis elasticsearch
+（此时 IDEA 环境变量需加 SPRING_ELASTICSEARCH_USERNAME=elastic）
+```
+
 ## Project Layout · 目录结构
 
 ```text
+Dockerfile                        多阶段构建（Maven 编译 → Temurin 17 JRE 运行）
+docker-compose.yml                mysql / redis / elasticsearch / app 四服务一键起
+deploy/init-sql/                  MySQL 容器首次启动自动执行的建表+种子脚本
 src/main/java/com/example/aiagentdemo/
-├── config/      ChatClientConfig · ElasticsearchIndexInitializer · RestClientConfig · Security* · WebMvcConfig · AdminAuthInterceptor
+├── config/      ChatClientConfig · ElasticsearchIndexInitializer · RestClientConfig · Security* · WebMvcConfig · AdminAuthInterceptor · RateLimitInterceptor · RequestLogInterceptor
 ├── controller/  AiTestController(RAG + Function Call) · AdminAuthController(登录/注册/登出) · AdminCourseController · AdminRagController · AdminHistoryController · AdminUserController · AuthController · CourseController · HealthController
 ├── service/     RagIngestService(切分入库) · HybridRetrievalService(混合检索+RRF) · RagQaService · AdminCourseService · UserService · CourseService · AiService
 ├── tools/       CourseTools(按名称/分类查课程) · HistoryTools(记录/查询提问历史)
@@ -259,7 +331,8 @@ src/main/resources/
 ├── document/java.md              RAG 语料：Java 课程文档
 ├── es/document-index-mapping.json 自定义索引 mapping（ngram bigram + dense_vector）
 ├── static/admin/                 管理后台 Vue SPA（index.html + 本地化 vue.global.prod.js）
-└── application.yml               全部密钥为环境变量占位符
+├── application.yml               全部密钥为环境变量占位符
+└── logback-spring.xml            日志：控制台 + logs/ 按天滚动（10MB/个，留 30 天）
 scripts/
 ├── reingest-and-test.ps1         一键「入库 + 提问自测」，支持 -RecreateIndex
 └── NOTES.md                      操作备忘录：常用命令、ES 运维、Git 自查与网络排查
@@ -286,7 +359,7 @@ scripts/
 - [ ] 检索重排（rerank）与元数据过滤
 - [ ] 检索/问答效果评估集，量化 `top-k`、阈值等参数
 - [ ] 流式输出（SSE）与前端问答页面
-- [ ] Docker Compose 一键起 MySQL / Redis / ES
+- [x] Docker Compose 一键起 MySQL / Redis / ES / app（含建表初始化脚本）
 - [x] Agent 化：Function Call 轻量工具路由（查课程、查提问历史）
 - [x] 管理后台 SPA（课程 CRUD / AI 答疑 / 检索调试 / 知识库 / 历史 / 用户）
 - [ ] Agent 扩展：成绩查询、多工具编排与参数校验

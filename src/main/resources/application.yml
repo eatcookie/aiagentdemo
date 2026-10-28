@@ -97,3 +97,7 @@ app:
   http:
     connect-timeout: 10s       # 建立连接超时
     read-timeout: 300s         # 读取响应超时，建议 180~300s（大模型生成较慢时给足余量）
+  # AI 问答限流：每人（登录用户名，未登录按 IP）每分钟最多 per-minute 次；Redis 故障自动放行
+  rate-limit:
+    enabled: true
+    per-minute: 10
