@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Map;
 
+import com.example.aiagentdemo.config.RequireAdmin;
+
 /** 后台用户管理（脱敏列表）。 */
 @RestController
 @RequestMapping("/api/admin/users")
@@ -21,6 +23,7 @@ public class AdminUserController {
     }
 
     @GetMapping
+    @RequireAdmin
     public Result<List<Map<String, Object>>> list() {
         return Result.ok(userService.listUsers());
     }

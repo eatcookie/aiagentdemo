@@ -5,9 +5,10 @@ import com.example.aiagentdemo.support.UserContext;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.stereotype.Component;
+import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
 
-/** 管理后台鉴权拦截器：校验 X-Token/Authorization，通过后把用户名写入 UserContext。 */
+/** 管理后台鉴权拦截器：校验 X-Token/Authorization，写入用户与角色，并按 @RequireAdmin 做角色管控。 */
 @Component
 public class AdminAuthInterceptor implements HandlerInterceptor {
 
@@ -29,14 +30,26 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
                 token = auth.substring(7);
             }
         }
-        String user = tokenStore.resolve(token);
-        if (user == null) {
+        TokenStore.Principal principal = tokenStore.resolvePrincipal(token);
+        if (principal == null) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.setContentType("application/json;charset=UTF-8");
             response.getWriter().write("{\"code\":401,\"message\":\"未登录或登录已过期\",\"data\":null}");
             return false;
         }
-        UserContext.set(user);
+        UserContext.set(principal.username());
+        UserContext.setRole(principal.role());
+
+        // 声明式管理员校验：方法或类上标注 @RequireAdmin 时，非 ADMIN 直接 403
+        if (handler instanceof HandlerMethod hm
+                && (hm.hasMethodAnnotation(RequireAdmin.class)
+                || hm.getBeanType().isAnnotationPresent(RequireAdmin.class))
+                && !"ADMIN".equalsIgnoreCase(principal.role())) {
+            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+            response.setContentType("application/json;charset=UTF-8");
+            response.getWriter().write("{\"code\":403,\"message\":\"需要管理员权限\",\"data\":null}");
+            return false;
+        }
         return true;
     }
 

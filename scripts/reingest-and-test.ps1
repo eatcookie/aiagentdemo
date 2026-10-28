@@ -60,7 +60,9 @@ param(
     [string]$EsBaseUrl  = 'http://localhost:9200',
     [string]$IndexName  = 'spring-ai-document-index-v2',
     [string]$EsUser     = $env:AI_ES_USER,
-    [string]$EsPass     = $env:AI_ES_PASS
+    [string]$EsPass     = $env:AI_ES_PASS,
+    [string]$AdminUser  = $env:AI_ADMIN_USER,
+    [string]$AdminPass  = $env:AI_ADMIN_PASS
 )
 
 $ErrorActionPreference = 'Stop'
@@ -95,9 +97,23 @@ if ($RecreateIndex) {
     return
 }
 
+# ---------- [1.5] 登录拿 Token（/api/ai/reingest 需鉴权）----------
+if ([string]::IsNullOrEmpty($AdminUser)) { $AdminUser = Read-Host '后台用户名' }
+if ([string]::IsNullOrEmpty($AdminPass)) {
+    $secure = Read-Host '后台密码' -AsSecureString
+    $AdminPass = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+        [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+}
+$loginBytes = [Text.Encoding]::UTF8.GetBytes((@{ username = $AdminUser; password = $AdminPass } | ConvertTo-Json -Compress))
+$login = (Invoke-JsonApi -Uri "$AppBaseUrl/api/admin/login" -BodyBytes $loginBytes -Headers $null) | ConvertFrom-Json
+if ($login.code -ne 0) { throw "登录失败：$($login.message)" }
+$tokenHeaders = @{ 'X-Token' = $login.data.token }
+Write-Host ("    登录成功：{0}（角色 {1}）" -f $login.data.user, $login.data.role) -ForegroundColor Green
+
+
 # ---------- [2] 覆盖式重新入库 ----------
 Write-Host '[2] 触发重新入库 POST /api/ai/reingest ...' -ForegroundColor Yellow
-$ingest = (Invoke-JsonApi -Uri "$AppBaseUrl/api/ai/reingest" -BodyBytes $null -Headers $null) | ConvertFrom-Json
+$ingest = (Invoke-JsonApi -Uri "$AppBaseUrl/api/ai/reingest" -BodyBytes $null -Headers $tokenHeaders) | ConvertFrom-Json
 Write-Host ("    入库结果：success={0}, ingestedChunks={1}" -f $ingest.success, $ingest.ingestedChunks) -ForegroundColor Green
 
 # ---------- [3] 检索自测 ----------

@@ -10,6 +10,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.example.aiagentdemo.config.RequireAdmin;
+
 /** 后台 AI 答疑 / 检索调试 / 知识库入库（受 AdminAuthInterceptor 保护）。 */
 @RestController
 @RequestMapping("/api/admin/rag")
@@ -36,6 +38,7 @@ public class AdminRagController {
     }
 
     @PostMapping("/reingest")
+    @RequireAdmin
     public Result<Map<String, Object>> reingest() {
         int n = ragQaService.reingest();
         Map<String, Object> data = new HashMap<>();

@@ -21,6 +21,7 @@ public class UserService {
         this.passwordEncoder = passwordEncoder;
     }
 
+    /** 仅用于 /api/login 演示 MyBatis + BCrypt 校验，不签发 Token；真正的后台登录走 authenticate() + TokenStore。 */
     public String login(String username, String password) {
         User user = userMapper.findByUsername(username);
         if (user != null && passwordEncoder.matches(password, user.getPassword())) {
@@ -29,16 +30,16 @@ public class UserService {
         return "用户名或密码错误";
     }
 
-    /** 管理后台登录校验：成功返回用户名，失败返回 null。 */
-    public String authenticate(String username, String password) {
+    /** 管理后台登录校验：成功返回用户（含角色），失败返回 null。 */
+    public User authenticate(String username, String password) {
         if (username == null || username.isBlank() || password == null) {
             return null;
         }
         User user = userMapper.findByUsername(username.trim());
-        return (user != null && passwordEncoder.matches(password, user.getPassword())) ? user.getUsername() : null;
+        return (user != null && passwordEncoder.matches(password, user.getPassword())) ? user : null;
     }
 
-    /** 用户注册：校验唯一性后用 BCrypt 加密密码写入 t_user。 */
+    /** 用户注册：校验唯一性后用 BCrypt 加密密码写入 t_user，默认角色 USER。 */
     public void register(String username, String password) {
         if (username == null || username.isBlank() || password == null || password.isBlank()) {
             throw new BizException("用户名和密码不能为空");
@@ -50,7 +51,7 @@ public class UserService {
         User user = new User();
         user.setUsername(u);
         user.setPassword(passwordEncoder.encode(password));
-        user.setRole("user");
+        user.setRole("USER");
         userMapper.insert(user);
     }
 

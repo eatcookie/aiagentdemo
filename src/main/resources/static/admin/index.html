@@ -82,7 +82,7 @@
         <div class="main">
             <div class="topbar">
                 <h1>{{ tabTitle }}</h1>
-                <div class="right">当前用户：{{ user }}<button class="sm ghost" @click="logout">退出登录</button></div>
+                <div class="right">当前用户：{{ user }}<span class="muted">（{{ role || 'USER' }}）</span><button class="sm ghost" @click="logout">退出登录</button></div>
             </div>
 
             <div class="content">
@@ -91,14 +91,14 @@
                     <div class="toolbar">
                         <input v-model="keyword" placeholder="搜索名称/分类/讲师" @keyup.enter="loadCourses(1)" style="width:220px">
                         <button @click="loadCourses(1)">搜索</button>
-                        <button class="ghost" @click="openCreate">+ 新增课程</button>
+                        <button class="ghost" v-if="isAdmin" @click="openCreate">+ 新增课程</button>
                     </div>
                     <table>
                         <thead><tr><th style="width:70px">ID</th><th>名称</th><th>讲师</th><th>分类</th><th style="width:130px">操作</th></tr></thead>
                         <tbody>
                         <tr v-if="!list.length"><td colspan="5" class="muted">暂无数据</td></tr>
                         <tr v-for="c in list" :key="c.id"><td>{{ c.id }}</td><td>{{ c.name }}</td><td>{{ c.teacher || '-' }}</td><td>{{ c.category || '-' }}</td>
-                            <td><button class="sm ghost" @click="openEdit(c)">编辑</button> <button class="sm danger" @click="doDelete(c)">删除</button></td></tr>
+                            <td><button class="sm ghost" @click="openEdit(c)">编辑</button> <button class="sm danger" v-if="isAdmin" @click="doDelete(c)">删除</button></td></tr>
                         </tbody>
                     </table>
                     <div class="pager">
@@ -131,7 +131,8 @@
                 <!-- 知识库入库 -->
                 <div v-if="tab==='kb'" class="card">
                     <p class="muted">覆盖式重新读取 <code>document/*.md</code>，切块 → DashScope 向量化 → 写入 Elasticsearch。改了文档后点一下即可（不会重复累积）。</p>
-                    <button :disabled="ingesting" @click="doReingest">{{ ingesting ? '入库中（较慢）…' : '重新入库' }}</button>
+                    <button :disabled="ingesting" v-if="isAdmin" @click="doReingest">{{ ingesting ? '入库中（较慢）…' : '重新入库' }}</button>
+                    <div v-if="!isAdmin" class="muted">仅 ADMIN 可触发入库。</div>
                     <div class="tip" :class="{ok: kbMsg && !kbError}">{{ kbMsg }}</div>
                 </div>
 
@@ -180,6 +181,7 @@
         data() {
             return {
                 token: localStorage.getItem('admin_token') || '', user: localStorage.getItem('admin_user') || '',
+                role: localStorage.getItem('admin_role') || '',
                 mode: 'login', loginForm: { username: '', password: '' }, regForm: { username: '', password: '', confirm: '' },
                 regError: '', authMsg: '', authError: false, loading: false,
                 tab: 'course',
@@ -195,6 +197,7 @@
         computed: {
             totalPages() { return Math.max(1, Math.ceil(this.total / this.size)); },
             tabTitle() { return ({ course: '课程管理', ai: 'AI 答疑', retrieval: '检索调试', kb: '知识库', history: '提问历史', user: '用户管理' })[this.tab]; },
+            isAdmin() { return (this.role || 'USER').toUpperCase() === 'ADMIN'; },
         },
         mounted() { if (this.token) this.loadCourses(1); },
         methods: {
@@ -211,8 +214,8 @@
                 this.authMsg = ''; this.authError = false; this.loading = true;
                 try {
                     const d = await this.request('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(this.loginForm) });
-                    this.token = d.token; this.user = d.user;
-                    localStorage.setItem('admin_token', d.token); localStorage.setItem('admin_user', d.user);
+                    this.token = d.token; this.user = d.user; this.role = d.role || 'USER';
+                    localStorage.setItem('admin_token', d.token); localStorage.setItem('admin_user', d.user); localStorage.setItem('admin_role', this.role);
                     this.tab = 'course'; this.loadCourses(1);
                 } catch (e) { this.authMsg = e.message; this.authError = true; } finally { this.loading = false; }
             },
@@ -230,8 +233,8 @@
             logout() {
                 const t = this.token;
                 if (t) { fetch('/api/admin/logout', { method: 'POST', headers: { 'X-Token': t } }).catch(() => {}); }
-                this.token = ''; this.user = ''; this.mode = 'login';
-                localStorage.removeItem('admin_token'); localStorage.removeItem('admin_user');
+                this.token = ''; this.user = ''; this.role = ''; this.mode = 'login';
+                localStorage.removeItem('admin_token'); localStorage.removeItem('admin_user'); localStorage.removeItem('admin_role');
             },
             go(tab) {
                 this.tab = tab;

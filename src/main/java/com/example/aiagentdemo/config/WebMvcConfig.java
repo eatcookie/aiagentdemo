@@ -26,8 +26,9 @@ public class WebMvcConfig implements WebMvcConfigurer {
         // AI 问答是高价/慢接口，优先限流（登录用户按人、匿名按 IP，每分钟 N 次）
         registry.addInterceptor(rateLimitInterceptor)
                 .addPathPatterns("/api/ai/ask", "/api/admin/rag/ask");
+        // 后台接口 + 知识库入库均需登录（入库会清空索引、有成本）；/api/ai/test 保持匿名
         registry.addInterceptor(adminAuthInterceptor)
-                .addPathPatterns("/api/admin/**")
+                .addPathPatterns("/api/admin/**", "/api/ai/reingest")
                 .excludePathPatterns("/api/admin/login", "/api/admin/register");
         // 日志拦截器最后注册：afterCompletion 逆序执行，可先于鉴权清理前读到 UserContext
         registry.addInterceptor(requestLogInterceptor)
@@ -39,4 +40,6 @@ public class WebMvcConfig implements WebMvcConfigurer {
         registry.addViewController("/admin").setViewName("forward:/admin/index.html");
         registry.addViewController("/admin/").setViewName("forward:/admin/index.html");
     }
+
+
 }

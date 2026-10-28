@@ -10,6 +10,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.example.aiagentdemo.config.RequireAdmin;
+
 @RestController
 @RequestMapping("/api/ai")
 public class AiTestController {
@@ -35,6 +37,7 @@ public class AiTestController {
     }
 
     @PostMapping("/reingest")
+    @RequireAdmin
     public Map<String, Object> reingest() {
         int count = ragQaService.reingest();
         return Map.of("success", count > 0, "ingestedChunks", count);

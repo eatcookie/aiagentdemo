@@ -12,8 +12,11 @@
 | ✅ Done | 文档按标题结构化切块入库、DashScope 向量化、ES 向量存储（自定义 mapping）、混合检索（向量 + BM25）、RRF 融合去重、`/api/ai/ask` 返回答案与引用来源、一键入库自测脚本 |
 | ✅ Done | **Function Call 轻量工具路由**：模型自主决定调用 `query_courses`（MySQL 按课程名/分类查询）或 `query_question_history`（Redis 按用户查提问历史） |
 | ✅ Done | **管理后台（Vue SPA + Token 鉴权）**：登录/注册/登出、课程增删改查分页、AI 答疑、检索调试、知识库入库、提问历史、用户管理，入口 `/admin` |
-| 🚧 In Progress | 检索质量调优（阈值/权重）、多文档类型支持（PDF 依赖已引入）、回答流式输出 |
-| 📋 Planned | 多轮对话记忆、重排（rerank）、检索效果评估集、简易前端页面、Docker 化部署 |
+| ✅ Done | **角色管控**：Token 内嵌角色（`ai:token:{token}` = `username|role`），写操作接口标注 `@RequireAdmin`，非 ADMIN 返回 403 |
+| ✅ Done | **Redis 问答缓存与限流**：`ai:qa:{user}:{question}`（TTL 1 天，命中零成本）+ 每人每分钟 N 次固定窗口限流（Redis 故障自动放行） |
+| ✅ Done | **工程化基座**：统一返回体 `Result`/`PageResult`、`GlobalExceptionHandler` 兜底、访问日志拦截器 + logback 按天滚动、Docker Compose 一键起 MySQL/Redis/ES/app |
+| 🚧 In Progress | 检索质量调优（阈值/权重）、多文档类型支持（PDF 依赖已引入，入库仍只扫 `document/*.md`）、回答流式输出 |
+| 📋 Planned | 多轮对话记忆、重排（rerank）、检索效果评估集、简易前端问答页 |
 
 详见 [Roadmap](#roadmap-后续计划)。
 
@@ -123,7 +126,9 @@ IDEA 中在 Run/Debug Configuration → Environment variables 填入即可。
 
 ```powershell
 # 覆盖式入库：先清空索引再写入，重复执行不会产生脏数据
-Invoke-RestMethod -Uri 'http://localhost:8080/api/ai/reingest' -Method POST
+$login = Invoke-RestMethod -Uri 'http://localhost:8080/api/admin/login' -Method POST `
+  -ContentType 'application/json' -Body '{"username":"你的账号","password":"你的密码"}'
+Invoke-RestMethod -Uri 'http://localhost:8080/api/ai/reingest' -Method POST -Headers @{ 'X-Token' = $login.data.token }
 # → @{success=True; ingestedChunks=56}
 ```
 
@@ -149,7 +154,7 @@ powershell -ExecutionPolicy Bypass -File scripts\reingest-and-test.ps1 -Question
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/ai/ask` | RAG 问答 + Function Call 工具，返回答案 + 引用来源 |
-| POST | `/api/ai/reingest` | 覆盖式重新入库，返回入库片段数 |
+| POST | `/api/ai/reingest` | 覆盖式重新入库，返回入库片段数（清空索引重写，仅覆盖 `document/*.md`；参与限流计数） |
 | GET | `/api/ai/test` | 纯模型连通性测试（不经过检索） |
 | POST | `/api/login` | 登录示例（MyBatis + BCrypt 校验） |
 | GET | `/course/list` | 课程列表示例 |
@@ -166,18 +171,21 @@ powershell -ExecutionPolicy Bypass -File scripts\reingest-and-test.ps1 -Question
 | POST | `/api/admin/logout` | 登出（作废 Redis Token，后端失效 + 前端清 localStorage 双清理） |
 | GET | `/api/admin/courses?keyword=&page=&size=` | 课程分页（匹配名称/分类/讲师） |
 | GET | `/api/admin/courses/{id}` | 课程详情 |
-| POST | `/api/admin/courses` | 新增课程 |
-| PUT | `/api/admin/courses/{id}` | 编辑课程 |
-| DELETE | `/api/admin/courses/{id}` | 删除课程 |
-| POST | `/api/admin/rag/ask` | AI 答疑（复用 `RagQaService`，user 取当前登录人） |
+| POST | `/api/admin/courses` | 新增课程（需 ADMIN） |
+| PUT | `/api/admin/courses/{id}` | 编辑课程（需 ADMIN） |
+| DELETE | `/api/admin/courses/{id}` | 删除课程（需 ADMIN） |
+| POST | `/api/admin/rag/ask` | AI 答疑（复用 `RagQaService`，user 取当前登录人；参与限流计数） |
 | GET | `/api/admin/rag/retrieval?question=` | 检索调试（只召回不调模型，查看向量+BM25+RRF） |
-| POST | `/api/admin/rag/reingest` | 知识库覆盖式入库 |
-| GET | `/api/admin/history?user=` | 查看提问历史（省略 user = 当前登录人） |
-| GET | `/api/admin/users` | 用户列表（脱敏，不含密码） |
+| POST | `/api/admin/rag/reingest` | 知识库覆盖式入库（需 ADMIN） |
+| GET | `/api/admin/history?user=` | 查看提问历史（省略 user = 当前登录人；查他人需 ADMIN） |
+| GET | `/api/admin/users` | 用户列表（脱敏，不含密码；需 ADMIN） |
+
 
 > 登出为「后端作废 Token + 前端清 localStorage」双清理：前端直接 `fetch('/api/admin/logout')` 携带旧 Token，`TokenStore.invalidate()` 删除 Redis 键；即使该请求失败，前端仍会清空本地存储兜底登出。
 
-后台页面含 6 个屏：课程管理、AI 答疑、检索调试、知识库、提问历史、用户管理。
+后台页面含 6 个屏：课程管理、AI 答疑、检索调试、知识库、提问历史、用户管理。角色在登录时随 Token 一起下发（`role`），前端据此隐藏写操作按钮，后端 `@RequireAdmin` 为准（前端隐藏只是体验优化）。
+
+**首个 ADMIN**：注册接口固定创建 `USER`，注册后手工执行 `UPDATE t_user SET role='ADMIN' WHERE username='xxx';` 并**重新登录**（角色写在 Token 值里，旧 Token 不会自动升级）。
 
 **`POST /api/ai/ask`**
 
@@ -237,6 +245,9 @@ powershell -ExecutionPolicy Bypass -File scripts\reingest-and-test.ps1 -Question
 | `app.rag.retrieval.rrf-k` | `60` | RRF 平滑常数 |
 | `app.rag.retrieval.text-min-should-match` | `50%` | 全文最小匹配门槛（去噪关键参数） |
 | `app.http.read-timeout` | `300s` | 大模型长回答读取超时 |
+| `app.rate-limit.enabled` | `true` | 是否启用 Redis 限流（Redis 挂掉自动放行） |
+| `app.rate-limit.per-minute` | `10` | 每人（未登录按 IP）每分钟最大请求数，超限返回 429 |
+
 
 调优口径：
 
@@ -270,9 +281,9 @@ Redis 键约定（登录 Token、提问历史、问答缓存、限流计数共�
 
 | Key | 类型 | 说明 | 过期/上限 |
 | --- | --- | --- | --- |
-| `ai:token:{token}` | String | 后台登录 Token → username | TTL 2h |
+| `ai:token:{token}` | String | 后台登录 Token → `username\|role` | TTL 2h |
 | `ai:history:{user}` | List | 用户提问历史（最新在前） | 保留 50 条 |
-| `ai:qa:{question}` | String | 问答结果缓存 | TTL 1 天 |
+| `ai:qa:{user}:{question}` | String | 问答结果缓存（命中则不调大模型） | TTL 1 天 |
 | `ai:limit:{identity}:{minute}` | Counter | 每人每分钟请求计数（限流） | TTL 60s |
 
 ## Cost · 成本估算
@@ -354,12 +365,14 @@ scripts/
 
 ## Roadmap · 后续计划
 
-- [ ] 多文档类型入库（PDF 依赖 `spring-ai-pdf-document-reader` 已引入）
+- [ ] 多文档类型入库（PDF 依赖 `spring-ai-pdf-document-reader` 已引入，入库逻辑待支持按扩展名分支）
 - [ ] 多轮对话与会话记忆（基于 Redis）
 - [ ] 检索重排（rerank）与元数据过滤
 - [ ] 检索/问答效果评估集，量化 `top-k`、阈值等参数
 - [ ] 流式输出（SSE）与前端问答页面
 - [x] Docker Compose 一键起 MySQL / Redis / ES / app（含建表初始化脚本）
+- [x] Redis 限流 + 问答结果缓存（命中缓存 0 token 成本）
+- [x] 角色管控：`@RequireAdmin` 注解 + Token 内嵌 role
 - [x] Agent 化：Function Call 轻量工具路由（查课程、查提问历史）
 - [x] 管理后台 SPA（课程 CRUD / AI 答疑 / 检索调试 / 知识库 / 历史 / 用户）
 - [ ] Agent 扩展：成绩查询、多工具编排与参数校验

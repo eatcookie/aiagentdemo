@@ -15,6 +15,8 @@ import java.util.Map;
 
 import jakarta.servlet.http.HttpServletRequest;
 
+import com.example.aiagentdemo.entity.User;
+
 /** 管理后台登录：校验账号密码并签发 Token（供前端后续请求带 X-Token）。 */
 @RestController
 @RequestMapping("/api/admin")
@@ -30,14 +32,15 @@ public class AdminAuthController {
 
     @PostMapping("/login")
     public Result<Map<String, Object>> login(@RequestBody LoginRequest request) {
-        String user = userService.authenticate(request.getUsername(), request.getPassword());
+        User user = userService.authenticate(request.getUsername(), request.getPassword());
         if (user == null) {
             throw new BizException(401, "用户名或密码错误");
         }
-        String token = tokenStore.issue(user);
+        String token = tokenStore.issue(user.getUsername(), user.getRole());
         Map<String, Object> data = new HashMap<>();
         data.put("token", token);
-        data.put("user", user);
+        data.put("user", user.getUsername());
+        data.put("role", user.getRole() == null ? "USER" : user.getRole());
         return Result.ok(data);
     }
 
